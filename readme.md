@@ -1,6 +1,6 @@
-# Domino MCP Server for Cursor
+# Domino MCP Server
 
-This project provides a Model Context Protocol (MCP) server that allows Cursor to interact with the Domino Data Lab platform. It enables you to start and check the status of Domino jobs directly from the Cursor chat interface.
+This project provides a Model Context Protocol (MCP) server that allows AI coding tools like Cursor to interact with the Domino Data Lab platform. It enables you to start and check the status of Domino jobs directly from the Cursor chat interface.
 
 ## Features
 
