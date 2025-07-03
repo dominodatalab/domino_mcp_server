@@ -95,7 +95,10 @@ Step 6.  **Create Domino Project Settings:**
 project_name="your-project-name"
 user_name="your_username"
 ```
-    Replace `"your-project-name"` and `"your_username"` with your actual Domino project name and username.
+
+Replace `"your-project-name"` and `"your_username"` with your actual Domino project name and user name from the project URL.
+
+**IMPORTANT: The above user name should be from the project URL, not necessarily your user name if you don't own the project**
 
 Step 7.  **Restart Cursor:** Restart Cursor completely to load the new MCP configuration.
 
