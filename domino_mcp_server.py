@@ -15,13 +15,31 @@ load_dotenv()
 
 # Load API key from environment variable
 domino_api_key = os.getenv("DOMINO_API_KEY")
-domino_host = os.getenv("DOMINO_HOST")
+proxy_host = os.getenv("DOMINO_API_PROXY")
+if proxy_host:
+    domino_host = proxy_host
+    print("Using Domino API proxy inside a workspace")
+else:
+    domino_host = os.getenv("DOMINO_HOST")
 
-if not domino_api_key:
+if not domino_api_key and not proxy_host:
     raise ValueError("DOMINO_API_KEY environment variable not set.")
 
 # Initialize the Fast MCP server
 mcp = FastMCP("domino_server")
+
+def get_api(url, api_key):
+    headers = {}
+    if not proxy_host:
+        headers["X-Domino-Api-Key"] = api_key
+    return requests.get(url,headers=headers)
+
+def post_api(url, api_key, payload):
+    headers = {"Content-Type": "application/json"}
+    if not proxy_host:
+        headers["X-Domino-Api-Key"] = api_key
+    return requests.post(url,headers=headers, json=payload)
+
 
 def _validate_url_parameter(param_value: str, param_name: str) -> str:
     """
@@ -100,11 +118,8 @@ async def check_domino_job_run_results(user_name: str, project_name: str, run_id
     encoded_run_id = _validate_url_parameter(run_id, "run_id")
     
     api_url = f"{domino_host}/v1/projects/{encoded_user_name}/{encoded_project_name}/run/{encoded_run_id}/stdout"
-    headers = {
-        "X-Domino-Api-Key": domino_api_key
-    }
     try:
-        response = requests.get(api_url, headers=headers)
+        response = get_api(api_url, domino_api_key)
         response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
         raw_stdout = response.json().get('stdout', '') # Use .get for safety
         
@@ -155,11 +170,8 @@ async def check_domino_job_run_status(user_name: str, project_name: str, run_id:
     encoded_run_id = _validate_url_parameter(run_id, "run_id")
     
     api_url = f"{domino_host}/v1/projects/{encoded_user_name}/{encoded_project_name}/runs/{encoded_run_id}"
-    headers = {
-        "X-Domino-Api-Key": domino_api_key
-    }
     try:
-        response = requests.get(api_url, headers=headers)
+        response = get_api(api_url, domino_api_key)
         response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
         result = response.json()
     except requests.exceptions.RequestException as e:
@@ -188,12 +200,6 @@ async def run_domino_job(user_name: str, project_name: str, run_command: str, ti
     # must be in this format: https://domino.host/v1/projects/user_name/project_name/runs
     api_url = f"{domino_host}/v1/projects/{encoded_user_name}/{encoded_project_name}/runs"
 
-    # Prepare the request headers
-    headers = {
-        "X-Domino-Api-Key": domino_api_key,
-        "Content-Type": "application/json",
-    }
-
     # Prepare the request body according to the specified requirements
     # for the /v1/projects/{user_name}/{project_name}/runs endpoint.
     payload = {
@@ -205,7 +211,7 @@ async def run_domino_job(user_name: str, project_name: str, run_command: str, ti
 
 
     try:
-        response = requests.post(api_url, headers=headers, json=payload)
+        response = post_api(api_url, domino_api_key, payload)
         response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
         result = response.json()
     except requests.exceptions.RequestException as e:
