@@ -18,6 +18,8 @@ domino_api_key = os.getenv("DOMINO_API_KEY")
 proxy_host = os.getenv("DOMINO_API_PROXY")
 if proxy_host:
     domino_host = proxy_host
+    global_user = os.getenv("DOMINO_PROJECT_OWNER")
+    global_project = os.getenv("DOMINO_PROJECT_NAME")
     print("Using Domino API proxy inside a workspace")
 else:
     domino_host = os.getenv("DOMINO_HOST")
@@ -92,7 +94,6 @@ def _extract_and_format_mlflow_url(text: str, user_name: str, project_name: str)
     # Regex to find the specific MLflow URL pattern
     pattern = r"http://127\.0\.0\.1:8768/#/experiments/(\d+)/runs/([a-f0-9]+)"
     match = re.search(pattern, text)
-
     if match:
         experiment_id = match.group(1)
         run_id = match.group(2)
@@ -103,15 +104,21 @@ def _extract_and_format_mlflow_url(text: str, user_name: str, project_name: str)
         return None # Return None if the pattern is not found
 
 @mcp.tool()
-async def check_domino_job_run_results(user_name: str, project_name: str, run_id: str) -> Dict[str, Any]:
+async def check_domino_job_run_results(run_id: str, user_name: str = None, project_name: str = None) -> Dict[str, Any]:
     """
     The check_domino_job_run_results function returns the results from the job run from the domino data science platform, these results might contain model training metrics that might help inform a follow-up job run that further optimizes a model.
 
     Args:
-        user_name (str): The user name associated with the Domino Project
-        project_name (str): The name of the Domino project.
         run_id (str): The run id of the job run to return the status of
+        user_name (str[Optional]): The user name associated with the Domino Project
+        project_name (str[Optional]): The name of the Domino project.
     """
+
+    if not user_name:
+        user_name = global_user
+    if not project_name:
+        project_name = global_project
+
     # Validate and encode input parameters
     encoded_user_name = _validate_url_parameter(user_name, "user_name")
     encoded_project_name = _validate_url_parameter(project_name, "project_name")
@@ -155,15 +162,21 @@ async def check_domino_job_run_results(user_name: str, project_name: str, run_id
     return result
 
 @mcp.tool()
-async def check_domino_job_run_status(user_name: str, project_name: str, run_id: str) -> Dict[str, Any]:
+async def check_domino_job_run_status(run_id: str, user_name: str = None, project_name: str = None) -> Dict[str, Any]:
     """
     The check_domino_job_run_status function checks the status of a job run to determine if its finished or in-progress or had an error. A run can sometimes take 1 or more minutes, so it might be necessary to call this a few times until it's finished before using a different function to read the results.
 
     Args:
-        user_name (str): The user name associated with the Domino Project
-        project_name (str): The name of the Domino project.
         run_id (str): The run id of the job run to return the status of
+        user_name (str[Optional]): The user name associated with the Domino Project
+        project_name (str[Optional]): The name of the Domino project.
     """
+
+    if not user_name:
+        user_name = global_user
+    if not project_name:
+        project_name = global_project
+
     # Validate and encode input parameters
     encoded_user_name = _validate_url_parameter(user_name, "user_name")
     encoded_project_name = _validate_url_parameter(project_name, "project_name")
@@ -182,16 +195,22 @@ async def check_domino_job_run_status(user_name: str, project_name: str, run_id:
     return result
 
 @mcp.tool()
-async def run_domino_job(user_name: str, project_name: str, run_command: str, title: str) -> Dict[str, Any]:
+async def run_domino_job(run_command: str, title: str, user_name: str = None, project_name: str = None) -> Dict[str, Any]:
     """
     The run_domino_job function runs a command as a job on the domino data science platform, typically a python script such a 'python my_script.py --arg1 arv1_val --arg2 arv2_val' on the Domino cloud platform.
 
     Args:
-        user_name (str): The user name associated with the Domino project.
-        project_name (str): The name of the Domino project.
         run_command (str): The command to run on the domino platform. Example: 'python my_script.py --arg1 arv1_val --arg2 arv2_val'
         title (str): A title of the job that helps later identify the job. Example: 'running training.py script'
+        user_name (str[Optional]): The user name associated with the Domino project.
+        project_name (str[Optional]): The name of the Domino project.
     """
+
+    if not user_name:
+        user_name = global_user
+    if not project_name:
+        project_name = global_project
+        
     # Validate and encode input parameters
     encoded_user_name = _validate_url_parameter(user_name, "user_name")
     encoded_project_name = _validate_url_parameter(project_name, "project_name")
