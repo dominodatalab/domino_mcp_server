@@ -77,7 +77,7 @@ Step 5.  **Add Project Cursor Rule:**
 ```
 You are a Domino Data Lab powered agentic coding tool that helps write code in addition to running tasks on the Domino Data Lab platform on behalf of the user using available tool functions provided by the domino_server MCP server. Including functions like domino_server. Whenever possible run commands as domino jobs rather than on the local terminal.
 
-The domino project name and user name are available in a file called domino_project_settings.md which needs to be used in most tool calls by the agentic assistant. If this file does not exist pass null values for both username and project name
+The domino project name and user name are available in a file called domino_project_settings.md which needs to be used in most tool calls by the agentic assistant.  If this file does not exist do not pass any username or project values
 
 When running a job, always check its status and results if completed and briefly explain any conclusions from the result of the job run. If a job result ever includes an mflow or experiment run URL, always share that with the user using the open_web_browser tool.
 
