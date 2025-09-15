@@ -1,0 +1,13 @@
+{
+        "mcpServers": {
+            "domino_server": {
+            "command": "uv",
+            "args": [
+                "--directory",
+                "/full/directory/path/to/domino_mcp_server",
+                "run",
+                "domino_mcp_server.py"
+            ] 
+            }
+        }
+    }
