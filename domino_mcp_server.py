@@ -11,14 +11,23 @@ import re
 import webbrowser
 import urllib.parse
 
+global headers
 load_dotenv()
 
 # Load API key from environment variable
 domino_api_key = os.getenv("DOMINO_API_KEY")
-domino_host = os.getenv("DOMINO_HOST")
+domino_host = os.getenv("MCP_DOMINO_HOST")
+user_name = os.getenv("DOMINO_STARTING_USERNAME")
+project_name = os.getenv("DOMINO_PROJECT_NAME")
 
-if not domino_api_key:
-    raise ValueError("DOMINO_API_KEY environment variable not set.")
+if domino_api_key:
+    headers = {"X-Domino-Api-Key": domino_api_key}
+else:
+    try:
+        jwt_token = requests.get("http://localhost:8899/access-token").text
+        headers = {"Authorization": f"Bearer {jwt_token}"}
+    except Exception as e:
+        raise ValueError(f"Failed to get JWT token: {e}, if not running in a Domino execution, set the DOMINO_API_KEY environment variable")
 
 # Initialize the Fast MCP server
 mcp = FastMCP("domino_server")
@@ -66,7 +75,7 @@ def _filter_domino_stdout(stdout_text: str) -> str:
         print("Warning: could not parse domino job output")
         return "Could not find start or end markers in stdout."
 
-def _extract_and_format_mlflow_url(text: str, user_name: str, project_name: str) -> str | None:
+def _extract_and_format_mlflow_url(text: str) -> str | None:
     """
     Finds an MLflow URL in the format http://127.0.0.1:8768/#/experiments/.../runs/...
     and reformats it to the Domino Cloud URL format.
@@ -85,13 +94,11 @@ def _extract_and_format_mlflow_url(text: str, user_name: str, project_name: str)
         return None # Return None if the pattern is not found
 
 @mcp.tool()
-async def check_domino_job_run_results(user_name: str, project_name: str, run_id: str) -> Dict[str, Any]:
+async def check_domino_job_run_results(run_id: str) -> Dict[str, Any]:
     """
     The check_domino_job_run_results function returns the results from the job run from the domino data science platform, these results might contain model training metrics that might help inform a follow-up job run that further optimizes a model.
 
     Args:
-        user_name (str): The user name associated with the Domino Project
-        project_name (str): The name of the Domino project.
         run_id (str): The run id of the job run to return the status of
     """
     # Validate and encode input parameters
@@ -100,9 +107,6 @@ async def check_domino_job_run_results(user_name: str, project_name: str, run_id
     encoded_run_id = _validate_url_parameter(run_id, "run_id")
     
     api_url = f"{domino_host}/v1/projects/{encoded_user_name}/{encoded_project_name}/run/{encoded_run_id}/stdout"
-    headers = {
-        "X-Domino-Api-Key": domino_api_key
-    }
     try:
         response = requests.get(api_url, headers=headers)
         response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
@@ -140,13 +144,11 @@ async def check_domino_job_run_results(user_name: str, project_name: str, run_id
     return result
 
 @mcp.tool()
-async def check_domino_job_run_status(user_name: str, project_name: str, run_id: str) -> Dict[str, Any]:
+async def check_domino_job_run_status(run_id: str) -> Dict[str, Any]:
     """
     The check_domino_job_run_status function checks the status of a job run to determine if its finished or in-progress or had an error. A run can sometimes take 1 or more minutes, so it might be necessary to call this a few times until it's finished before using a different function to read the results.
 
     Args:
-        user_name (str): The user name associated with the Domino Project
-        project_name (str): The name of the Domino project.
         run_id (str): The run id of the job run to return the status of
     """
     # Validate and encode input parameters
@@ -155,9 +157,6 @@ async def check_domino_job_run_status(user_name: str, project_name: str, run_id:
     encoded_run_id = _validate_url_parameter(run_id, "run_id")
     
     api_url = f"{domino_host}/v1/projects/{encoded_user_name}/{encoded_project_name}/runs/{encoded_run_id}"
-    headers = {
-        "X-Domino-Api-Key": domino_api_key
-    }
     try:
         response = requests.get(api_url, headers=headers)
         response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
@@ -170,13 +169,11 @@ async def check_domino_job_run_status(user_name: str, project_name: str, run_id:
     return result
 
 @mcp.tool()
-async def run_domino_job(user_name: str, project_name: str, run_command: str, title: str) -> Dict[str, Any]:
+async def run_domino_job(run_command: str, title: str) -> Dict[str, Any]:
     """
     The run_domino_job function runs a command as a job on the domino data science platform, typically a python script such a 'python my_script.py --arg1 arv1_val --arg2 arv2_val' on the Domino cloud platform.
 
     Args:
-        user_name (str): The user name associated with the Domino project.
-        project_name (str): The name of the Domino project.
         run_command (str): The command to run on the domino platform. Example: 'python my_script.py --arg1 arv1_val --arg2 arv2_val'
         title (str): A title of the job that helps later identify the job. Example: 'running training.py script'
     """
@@ -189,10 +186,8 @@ async def run_domino_job(user_name: str, project_name: str, run_command: str, ti
     api_url = f"{domino_host}/v1/projects/{encoded_user_name}/{encoded_project_name}/runs"
 
     # Prepare the request headers
-    headers = {
-        "X-Domino-Api-Key": domino_api_key,
-        "Content-Type": "application/json",
-    }
+    headers_job = headers.copy()
+    headers_job["Content-Type"] = "application/json"
 
     # Prepare the request body according to the specified requirements
     # for the /v1/projects/{user_name}/{project_name}/runs endpoint.
@@ -205,7 +200,7 @@ async def run_domino_job(user_name: str, project_name: str, run_command: str, ti
 
 
     try:
-        response = requests.post(api_url, headers=headers, json=payload)
+        response = requests.post(api_url, headers=headers_job, json=payload)
         response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
         result = response.json()
     except requests.exceptions.RequestException as e:
