@@ -75,6 +75,11 @@ Step 5.  **Add Project Cursor Rule:**
 
 ** Rule contents to paste in **
 ```
+---
+description: 
+globs: 
+alwaysApply: true
+---
 You are a Domino Data Lab powered agentic coding tool that helps write code in addition to running tasks on the Domino Data Lab platform on behalf of the user using available tool functions provided by the domino_server MCP server. Including functions like domino_server. Whenever possible run commands as domino jobs rather than on the local terminal. 
 
 The domino project name and user name are required and available in a file called domino_project_settings.md which needs to be used in most tool calls by the agentic assistant.
@@ -83,7 +88,13 @@ When running a job, always check its status and results if completed and briefly
 
 Any requests related to understanding or manipulating project data should assume a dataset file is already part of the domino project and accessible via job runs. Always create scripts to understand and transform data via job runs. The script can assume all project data is accessible under the '/mnt/data/' directory or the '/mnt/imported/data/' directory, be sure to understand the full path to a dataset file before using it by running a job to list all folder contents recursively. Analytical outputs should be in plain text tabular format sent to stdout, this makes it easier to check results from the job run.
 
-Always check if our local project has uncommitted changes, you must commit and push changes before attempting to run any domino jobs otherwise domino can't see the new file changes.
+If the project is dfs instead of git based. check the dfs=true or false settings in check domino_project_settings.md, the datasets path is under /domino/datasets/*
+
+Any scripts used to analyze or transform data within a Domino project should not be deleted. When performing analysis, generate useful summary charts in an image format and save to the project files.
+
+Always check if our local project has uncommitted changes, you must commit and push changes before attempting to run any domino jobs otherwise domino can't see the new file changes. Be sure to check domino_project_settings.md if dfs=true which means this NOT a git based domino project, and the MCP Server functions for saving files will need to be used instead of git before running any jobs. If it is a git based project (dfs=false in domino_project_settings.md), use regular git commands to keep files synced between the IDE and the domino project.
+
+When training a model use mlflow instrumentation assuming a server is running, no need to set the url or anything, it should just work.
 ```
 
 <br />
@@ -94,9 +105,10 @@ Step 6.  **Create Domino Project Settings:**
 # Domino project settings to use with the mcp server domino_server and its job runner functions
 project_name="your-project-name"
 user_name="your_username"
+dfs=false
 ```
 
-Replace `"your-project-name"` and `"your_username"` with your actual Domino project name and user name from the project URL.
+Replace `"your-project-name"` and `"your_username"` with your actual Domino project name and user name from the project URL. set `dfs=true` if your Domino Project is using DFS (Domino File System) and not a regular Git based repo.
 
 **IMPORTANT: The above user name should be from the project URL, not necessarily your user name if you don't own the project**
 
