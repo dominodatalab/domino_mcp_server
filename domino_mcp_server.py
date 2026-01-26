@@ -48,23 +48,53 @@ def _validate_url_parameter(param_value: str, param_name: str) -> str:
 def _filter_domino_stdout(stdout_text: str) -> str:
     """
     Filters the stdout text from a Domino job run to extract the relevant output.
-    It extracts text between the specified start and end markers.
+    It tries to extract text between known infrastructure markers, but falls back
+    to returning the full stdout if markers aren't found.
+    
+    Note: Git and DFS projects have different paths:
+    - Git projects: /mnt/artifacts/.domino/configure-spark-defaults.sh
+    - DFS projects: /mnt/.domino/configure-spark-defaults.sh
     """
-    start_marker = "### Completed /mnt/artifacts/.domino/configure-spark-defaults.sh ###"
-    end_marker = "Evaluating cleanup command on EXIT"
-
-    try:
-        start_index = stdout_text.index(start_marker) + len(start_marker)
-        # Find the end marker starting from the position after the start marker
-        end_index = stdout_text.index(end_marker, start_index)
-        # Extract the text between the markers, stripping leading/trailing whitespace
-        filtered_text = stdout_text[start_index:end_index].strip()
-        return filtered_text
-    except ValueError:
-        # Handle cases where one or both markers are not found
-        # Optionally, return the original text or a specific message
-        print("Warning: could not parse domino job output")
-        return "Could not find start or end markers in stdout."
+    # Start marker patterns (regex) - handles both Git and DFS project paths
+    start_patterns = [
+        r"### Completed /mnt(?:/artifacts)?/\.domino/configure-spark-defaults\.sh ###",
+        r"### Starting user code ###",
+        r"Starting job\.\.\.",
+    ]
+    
+    # End marker patterns (regex)
+    end_patterns = [
+        r"Evaluating cleanup command on EXIT",
+        r"### User code finished ###",
+        r"Job completed",
+    ]
+    
+    # Try to find a matching start marker using regex
+    start_index = 0
+    for pattern in start_patterns:
+        match = re.search(pattern, stdout_text)
+        if match:
+            start_index = match.end()
+            break
+    
+    # Try to find a matching end marker using regex
+    end_index = len(stdout_text)
+    for pattern in end_patterns:
+        match = re.search(pattern, stdout_text[start_index:])
+        if match:
+            end_index = start_index + match.start()
+            break
+    
+    # Extract and clean the text
+    filtered_text = stdout_text[start_index:end_index].strip()
+    
+    # If we couldn't extract anything meaningful (markers not found, empty result),
+    # return the full stdout rather than an error message
+    if not filtered_text:
+        # Return the raw stdout, just trimmed of whitespace
+        return stdout_text.strip() if stdout_text.strip() else "(No output captured)"
+    
+    return filtered_text
 
 def _extract_and_format_mlflow_url(text: str, user_name: str, project_name: str) -> str | None:
     """
@@ -84,10 +114,63 @@ def _extract_and_format_mlflow_url(text: str, user_name: str, project_name: str)
     else:
         return None # Return None if the pattern is not found
 
+def _get_project_id(user_name: str, project_name: str) -> str | None:
+    """
+    Gets the project ID for a given user and project name.
+    
+    When running inside Domino, uses the DOMINO_PROJECT_ID environment variable
+    (automatically provided by the platform). Otherwise, falls back to looking
+    up the project via the gateway API.
+    
+    Args:
+        user_name: The username of the project owner
+        project_name: The name of the project
+        
+    Returns:
+        The project ID string, or None if not found
+    """
+    # First, check if running inside Domino (platform provides project ID)
+    domino_project_id = os.getenv("DOMINO_PROJECT_ID")
+    if domino_project_id:
+        return domino_project_id
+    
+    # Fall back to API lookup when running outside Domino (e.g., laptop)
+    headers = {
+        "X-Domino-Api-Key": domino_api_key,
+        "Content-Type": "application/json",
+    }
+    
+    url = f"{domino_host}/v4/gateway/projects"
+    params = {"relationship": "Owned"}
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        projects = response.json()
+        
+        for project in projects:
+            if project.get('name') == project_name:
+                return project.get('id')
+                
+        # If not in owned, try all projects the user has access to
+        params = {"relationship": "All"}
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        projects = response.json()
+        
+        for project in projects:
+            if project.get('name') == project_name:
+                return project.get('id')
+                
+    except requests.exceptions.RequestException:
+        pass
+        
+    return None
+
 @mcp.tool()
 async def check_domino_job_run_results(user_name: str, project_name: str, run_id: str) -> Dict[str, Any]:
     """
-    The check_domino_job_run_results function returns the results from the job run from the domino data science platform, these results might contain model training metrics that might help inform a follow-up job run that further optimizes a model.
+    Returns the stdout results from a Domino job run.
 
     Args:
         user_name (str): The user name associated with the Domino Project
@@ -230,6 +313,390 @@ def open_web_browser(url: str) -> bool:
         return True
     except webbrowser.Error:
         return False
+
+
+# ============================================================================
+# DFS (Domino File System) File Sync Tools
+# These tools support syncing files with non-git Domino projects that use DFS
+# ============================================================================
+
+# In-memory cache to track file versions we've seen
+# Key: (user_name, project_name, file_path) -> {"key": str, "content": str}
+_file_version_cache: Dict[tuple, Dict[str, Any]] = {}
+
+
+def _get_remote_file_info(user_name: str, project_name: str, file_path: str) -> Dict[str, Any] | None:
+    """
+    Gets the current remote file info (key, size) without downloading content.
+    Returns None if file doesn't exist.
+    """
+    headers = {
+        "X-Domino-Api-Key": domino_api_key,
+        "Content-Type": "application/json",
+    }
+    
+    url = f"{domino_host}/v4/files/browseFiles"
+    params = {
+        "ownerUsername": user_name,
+        "projectName": project_name,
+        "filePath": "/"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        files = response.json()
+        
+        for f in files:
+            if f.get("path") == file_path:
+                return {
+                    "key": f.get("key"),
+                    "size": f.get("size"),
+                    "lastModified": f.get("lastModified")
+                }
+        return None
+    except:
+        return None
+
+
+@mcp.tool()
+async def list_domino_project_files(user_name: str, project_name: str, path: str = "/") -> Dict[str, Any]:
+    """
+    Lists files in a Domino project directory. Works with DFS (non-git) projects.
+    Use this to see what files exist in a Domino project before uploading or downloading.
+
+    Args:
+        user_name (str): The username of the project owner (e.g., 'etan_lightstone')
+        project_name (str): The name of the Domino project (e.g., 'diabetes_dfs_proj')
+        path (str): The directory path to list files from (default: "/" for root)
+
+    Returns:
+        Dict containing 'files' list with file info (path, size, lastModified, key)
+        or 'error' if the operation failed.
+    """
+    headers = {
+        "X-Domino-Api-Key": domino_api_key,
+        "Content-Type": "application/json",
+    }
+    
+    # Use browseFiles endpoint to list files
+    url = f"{domino_host}/v4/files/browseFiles"
+    params = {
+        "ownerUsername": user_name,
+        "projectName": project_name,
+        "filePath": path
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        files = response.json()
+        
+        # Simplify the response for easier consumption
+        simplified_files = []
+        for f in files:
+            simplified_files.append({
+                "path": f.get("path"),
+                "name": f.get("name"),
+                "size": f.get("size"),
+                "lastModified": f.get("lastModified"),
+                "key": f.get("key")
+            })
+        
+        return {"files": simplified_files, "count": len(simplified_files)}
+        
+    except requests.exceptions.RequestException as e:
+        return {"error": f"API request failed: {e}"}
+    except Exception as e:
+        return {"error": f"An unexpected error occurred: {e}"}
+
+
+@mcp.tool()
+async def upload_file_to_domino_project(
+    user_name: str, 
+    project_name: str, 
+    file_path: str,
+    file_content: str
+) -> Dict[str, Any]:
+    """
+    Uploads a file to a Domino project. Works with DFS (non-git) projects.
+    Use this to sync local file changes to a Domino project.
+
+    Args:
+        user_name (str): The username of the project owner (e.g., 'etan_lightstone')
+        project_name (str): The name of the Domino project (e.g., 'diabetes_dfs_proj')
+        file_path (str): The path where the file should be saved in the project (e.g., 'scripts/train.py')
+        file_content (str): The content of the file to upload
+
+    Returns:
+        Dict containing upload result with 'path', 'size', 'key' on success,
+        or 'error' if the operation failed.
+    """
+    # Get the project ID first
+    project_id = _get_project_id(user_name, project_name)
+    if not project_id:
+        return {"error": f"Project '{project_name}' not found for user '{user_name}'"}
+    
+    # Upload endpoint
+    url = f"{domino_host}/v4/projects/{project_id}/commits/head/files/{file_path}"
+    
+    # Prepare multipart form data
+    headers = {"X-Domino-Api-Key": domino_api_key}
+    files_data = {'upfile': (file_path.split('/')[-1], file_content, 'text/plain')}
+    
+    try:
+        response = requests.post(url, headers=headers, files=files_data)
+        response.raise_for_status()
+        result = response.json()
+        
+        return {
+            "success": True,
+            "path": result.get("path"),
+            "size": result.get("size"),
+            "key": result.get("key"),
+            "lastModified": result.get("lastModified")
+        }
+        
+    except requests.exceptions.RequestException as e:
+        return {"error": f"API request failed: {e}"}
+    except Exception as e:
+        return {"error": f"An unexpected error occurred: {e}"}
+
+
+@mcp.tool()
+async def download_file_from_domino_project(
+    user_name: str, 
+    project_name: str, 
+    file_path: str
+) -> Dict[str, Any]:
+    """
+    Downloads a file's content from a Domino project. Works with DFS (non-git) projects.
+    Use this to get the latest version of a file from a Domino project.
+    
+    IMPORTANT: This function remembers the file version you downloaded. When you later
+    use smart_sync_file to upload changes, it will detect if someone else modified
+    the file in the meantime.
+
+    Args:
+        user_name (str): The username of the project owner (e.g., 'etan_lightstone')
+        project_name (str): The name of the Domino project (e.g., 'diabetes_dfs_proj')
+        file_path (str): The path of the file to download (e.g., 'scripts/train.py')
+
+    Returns:
+        Dict containing 'content' with the file content on success,
+        plus 'key' which is the version identifier for conflict detection,
+        or 'error' if the operation failed.
+    """
+    headers = {
+        "X-Domino-Api-Key": domino_api_key,
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",  # Ensure we get the latest version
+    }
+    
+    # Use editCode endpoint to get file content
+    url = f"{domino_host}/v4/files/editCode"
+    params = {
+        "ownerUsername": user_name,
+        "projectName": project_name,
+        "pathString": file_path
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        result = response.json()
+        
+        # The content might be in different fields depending on file type
+        content = result.get("content")
+        if content is None:
+            content = result.get("codeContent", "")
+        
+        # Get the file's key for version tracking
+        remote_info = _get_remote_file_info(user_name, project_name, file_path)
+        file_key = remote_info.get("key") if remote_info else None
+        
+        # Cache this version for conflict detection in smart_sync_file
+        if file_key:
+            cache_key = (user_name, project_name, file_path)
+            _file_version_cache[cache_key] = {"key": file_key, "content": content}
+        
+        return {
+            "success": True,
+            "path": file_path,
+            "content": content,
+            "key": file_key,
+            "commitId": result.get("currentCommitId")
+        }
+        
+    except requests.exceptions.RequestException as e:
+        return {"error": f"API request failed: {e}"}
+    except Exception as e:
+        return {"error": f"An unexpected error occurred: {e}"}
+
+
+@mcp.tool()
+async def sync_local_file_to_domino(
+    user_name: str,
+    project_name: str,
+    local_file_path: str,
+    domino_file_path: str | None = None
+) -> Dict[str, Any]:
+    """
+    Reads a local file and uploads it to a Domino project. Works with DFS (non-git) projects.
+    This is a convenience function that combines reading a local file and uploading it.
+
+    Args:
+        user_name (str): The username of the project owner (e.g., 'etan_lightstone')
+        project_name (str): The name of the Domino project (e.g., 'diabetes_dfs_proj')
+        local_file_path (str): The absolute path to the local file to upload
+        domino_file_path (str, optional): The path in Domino where the file should be saved.
+                                          If not provided, uses the filename from local_file_path.
+
+    Returns:
+        Dict containing upload result on success, or 'error' if the operation failed.
+    """
+    # Read the local file
+    try:
+        with open(local_file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except FileNotFoundError:
+        return {"error": f"Local file not found: {local_file_path}"}
+    except Exception as e:
+        return {"error": f"Failed to read local file: {e}"}
+    
+    # Determine the destination path
+    if domino_file_path is None:
+        domino_file_path = os.path.basename(local_file_path)
+    
+    # Upload to Domino
+    return await upload_file_to_domino_project(
+        user_name=user_name,
+        project_name=project_name,
+        file_path=domino_file_path,
+        file_content=content
+    )
+
+
+@mcp.tool()
+async def smart_sync_file(
+    user_name: str,
+    project_name: str,
+    file_path: str,
+    content: str,
+    force_overwrite: bool = False
+) -> Dict[str, Any]:
+    """
+    Intelligently syncs a file to a Domino project with conflict detection. Only use this for non-git projects (dfs based).
+    
+    This is the RECOMMENDED way to upload files when working with shared projects.
+    It automatically detects if someone else modified the file since you last 
+    downloaded it, and returns conflict information instead of blindly overwriting.
+    
+    Workflow:
+    1. If you previously downloaded this file (via download_file_from_domino_project),
+       we remember its version. Before uploading, we check if the remote changed.
+    2. If remote changed → returns conflict with both versions so you can decide
+    3. If remote unchanged → uploads your changes
+    4. If file is new → uploads directly
+    
+    Args:
+        user_name (str): The username of the project owner
+        project_name (str): The name of the Domino project  
+        file_path (str): The path where the file should be saved
+        content (str): The new content to upload
+        force_overwrite (bool): If True, skip conflict check and overwrite regardless.
+                               Use this when you intentionally want to replace remote changes.
+
+    Returns:
+        On success: {"success": True, "action": "uploaded/created", "key": "..."}
+        On conflict: {
+            "conflict": True,
+            "message": "Remote file changed since you last downloaded it",
+            "your_content": "...",
+            "remote_content": "...", 
+            "remote_key": "...",
+            "your_base_key": "...",
+            "suggestion": "Review both versions and decide which to keep, or merge them"
+        }
+    """
+    cache_key = (user_name, project_name, file_path)
+    cached_version = _file_version_cache.get(cache_key)
+    
+    # Check current remote state
+    remote_info = _get_remote_file_info(user_name, project_name, file_path)
+    
+    # Case 1: File doesn't exist remotely - just create it
+    if remote_info is None:
+        result = await upload_file_to_domino_project(user_name, project_name, file_path, content)
+        if result.get("success"):
+            # Update cache with new version
+            _file_version_cache[cache_key] = {"key": result.get("key"), "content": content}
+            return {
+                "success": True,
+                "action": "created",
+                "message": f"Created new file: {file_path}",
+                "key": result.get("key"),
+                "size": result.get("size")
+            }
+        return result
+    
+    # Case 2: File exists but we haven't downloaded it before (no cached version)
+    if cached_version is None and not force_overwrite:
+        # Download the remote content to show the user what's there
+        remote_result = await download_file_from_domino_project(user_name, project_name, file_path)
+        remote_content = remote_result.get("content", "")
+        
+        # If content is identical, just upload (idempotent)
+        if remote_content == content:
+            _file_version_cache[cache_key] = {"key": remote_info["key"], "content": content}
+            return {
+                "success": True,
+                "action": "no_change",
+                "message": "File content identical to remote, no upload needed",
+                "key": remote_info["key"]
+            }
+        
+        return {
+            "conflict": True,
+            "message": f"File '{file_path}' already exists on Domino with different content. Download it first to establish a baseline, or use force_overwrite=True.",
+            "remote_content": remote_content,
+            "remote_key": remote_info["key"],
+            "your_content": content,
+            "suggestion": "Call download_file_from_domino_project first to see the remote version, then decide how to proceed"
+        }
+    
+    # Case 3: We have a cached version - check if remote changed
+    if cached_version and not force_overwrite:
+        if remote_info["key"] != cached_version["key"]:
+            # Remote changed! Fetch the new remote content
+            remote_result = await download_file_from_domino_project(user_name, project_name, file_path)
+            remote_content = remote_result.get("content", "")
+            
+            return {
+                "conflict": True,
+                "message": f"Remote file changed since you last downloaded it!",
+                "your_base_key": cached_version["key"],
+                "remote_key": remote_info["key"],
+                "your_content": content,
+                "remote_content": remote_content,
+                "original_content": cached_version.get("content", ""),
+                "suggestion": "Someone modified this file. Review the remote changes, merge if needed, then use force_overwrite=True to upload your final version."
+            }
+    
+    # Case 4: Safe to upload (remote unchanged or force_overwrite)
+    result = await upload_file_to_domino_project(user_name, project_name, file_path, content)
+    if result.get("success"):
+        # Update cache with new version
+        _file_version_cache[cache_key] = {"key": result.get("key"), "content": content}
+        action = "force_overwritten" if force_overwrite else "uploaded"
+        return {
+            "success": True,
+            "action": action,
+            "message": f"Successfully {action} {file_path}",
+            "key": result.get("key"),
+            "size": result.get("size")
+        }
+    return result
 
 
 # async def main():
