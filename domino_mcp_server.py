@@ -13,12 +13,70 @@ import urllib.parse
 
 load_dotenv()
 
-# Load API key from environment variable
-domino_api_key = os.getenv("DOMINO_API_KEY")
-domino_host = os.getenv("DOMINO_HOST")
 
-if not domino_api_key:
-    raise ValueError("DOMINO_API_KEY environment variable not set.")
+def _is_domino_workspace() -> bool:
+    """Detect whether we're running inside a Domino workspace."""
+    return bool(os.environ.get("DOMINO_API_HOST"))
+
+
+def _get_domino_host() -> str:
+    """
+    Return the base URL for Domino API calls.
+
+    Inside a Domino workspace the platform provides DOMINO_API_HOST.
+    Outside (laptop), we fall back to DOMINO_HOST from the .env file.
+    """
+    if _is_domino_workspace():
+        return os.environ["DOMINO_API_HOST"].rstrip("/")
+    host = os.getenv("DOMINO_HOST")
+    if not host:
+        raise ValueError("DOMINO_HOST environment variable not set.")
+    return host.rstrip("/")
+
+
+def _get_auth_headers() -> dict:
+    """
+    Return authentication headers for Domino API calls.
+
+    Inside a Domino workspace we obtain a short-lived token from the local
+    token endpoint on every call (the token expires very quickly).
+    An API_KEY_OVERRIDE env-var is also honoured for local dev inside Domino.
+
+    Outside Domino we use the classic DOMINO_API_KEY from .env.
+    """
+    # Explicit override always wins (useful for debugging inside Domino)
+    api_key_override = os.environ.get("API_KEY_OVERRIDE")
+    if api_key_override:
+        return {"X-Domino-Api-Key": api_key_override}
+
+    if _is_domino_workspace():
+        resp = requests.get("http://localhost:8899/access-token")
+        resp.raise_for_status()
+        token = resp.text.strip()
+        if token.startswith("Bearer "):
+            return {"Authorization": token}
+        return {"Authorization": f"Bearer {token}"}
+
+    # Legacy: running on a laptop with an API key in .env
+    api_key = os.getenv("DOMINO_API_KEY")
+    if not api_key:
+        raise ValueError("DOMINO_API_KEY environment variable not set.")
+    return {"X-Domino-Api-Key": api_key}
+
+
+def _get_workspace_project_info() -> dict | None:
+    """
+    When running inside a Domino workspace, return the auto-detected project
+    owner and project name from the platform-provided env vars.
+    Returns None when not inside a Domino workspace.
+    """
+    if not _is_domino_workspace():
+        return None
+    owner = os.environ.get("DOMINO_PROJECT_OWNER")
+    name = os.environ.get("DOMINO_PROJECT_NAME")
+    if owner and name:
+        return {"user_name": owner, "project_name": name}
+    return None
 
 # Initialize the Fast MCP server
 mcp = FastMCP("domino_server")
@@ -109,7 +167,7 @@ def _extract_and_format_mlflow_url(text: str, user_name: str, project_name: str)
         experiment_id = match.group(1)
         run_id = match.group(2)
         # Construct the new URL
-        new_url = f"{domino_host}/experiments/{user_name}/{project_name}/{experiment_id}/{run_id}"
+        new_url = f"{_get_domino_host()}/experiments/{user_name}/{project_name}/{experiment_id}/{run_id}"
         return new_url
     else:
         return None # Return None if the pattern is not found
@@ -135,12 +193,9 @@ def _get_project_id(user_name: str, project_name: str) -> str | None:
         return domino_project_id
     
     # Fall back to API lookup when running outside Domino (e.g., laptop)
-    headers = {
-        "X-Domino-Api-Key": domino_api_key,
-        "Content-Type": "application/json",
-    }
+    headers = {**_get_auth_headers(), "Content-Type": "application/json"}
     
-    url = f"{domino_host}/v4/gateway/projects"
+    url = f"{_get_domino_host()}/v4/gateway/projects"
     params = {"relationship": "Owned"}
     
     try:
@@ -182,10 +237,8 @@ async def check_domino_job_run_results(user_name: str, project_name: str, run_id
     encoded_project_name = _validate_url_parameter(project_name, "project_name")
     encoded_run_id = _validate_url_parameter(run_id, "run_id")
     
-    api_url = f"{domino_host}/v1/projects/{encoded_user_name}/{encoded_project_name}/run/{encoded_run_id}/stdout"
-    headers = {
-        "X-Domino-Api-Key": domino_api_key
-    }
+    api_url = f"{_get_domino_host()}/v1/projects/{encoded_user_name}/{encoded_project_name}/run/{encoded_run_id}/stdout"
+    headers = _get_auth_headers()
     try:
         response = requests.get(api_url, headers=headers)
         response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
@@ -237,10 +290,8 @@ async def check_domino_job_run_status(user_name: str, project_name: str, run_id:
     encoded_project_name = _validate_url_parameter(project_name, "project_name")
     encoded_run_id = _validate_url_parameter(run_id, "run_id")
     
-    api_url = f"{domino_host}/v1/projects/{encoded_user_name}/{encoded_project_name}/runs/{encoded_run_id}"
-    headers = {
-        "X-Domino-Api-Key": domino_api_key
-    }
+    api_url = f"{_get_domino_host()}/v1/projects/{encoded_user_name}/{encoded_project_name}/runs/{encoded_run_id}"
+    headers = _get_auth_headers()
     try:
         response = requests.get(api_url, headers=headers)
         response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
@@ -269,13 +320,10 @@ async def run_domino_job(user_name: str, project_name: str, run_command: str, ti
   
     # Construct the API URL
     # must be in this format: https://domino.host/v1/projects/user_name/project_name/runs
-    api_url = f"{domino_host}/v1/projects/{encoded_user_name}/{encoded_project_name}/runs"
+    api_url = f"{_get_domino_host()}/v1/projects/{encoded_user_name}/{encoded_project_name}/runs"
 
     # Prepare the request headers
-    headers = {
-        "X-Domino-Api-Key": domino_api_key,
-        "Content-Type": "application/json",
-    }
+    headers = {**_get_auth_headers(), "Content-Type": "application/json"}
 
     # Prepare the request body according to the specified requirements
     # for the /v1/projects/{user_name}/{project_name}/runs endpoint.
@@ -315,6 +363,50 @@ def open_web_browser(url: str) -> bool:
         return False
 
 
+@mcp.tool()
+async def get_domino_environment_info() -> Dict[str, Any]:
+    """
+    Returns information about the current Domino environment.
+    Use this at the start of a session to auto-detect the project owner,
+    project name, whether this is a DFS or Git project, and what
+    authentication mode is in use.
+
+    When running inside a Domino workspace most settings are detected
+    automatically from platform-provided environment variables.
+    When running outside Domino (e.g. on a laptop) the response will
+    indicate that a domino_project_settings.md file should be consulted.
+    """
+    import subprocess
+
+    info: Dict[str, Any] = {
+        "inside_domino_workspace": _is_domino_workspace(),
+        "domino_host": _get_domino_host(),
+    }
+
+    if _is_domino_workspace():
+        info["user_name"] = os.environ.get("DOMINO_PROJECT_OWNER", "")
+        info["project_name"] = os.environ.get("DOMINO_PROJECT_NAME", "")
+        info["auth_mode"] = "ephemeral_token"
+
+        # Auto-detect DFS vs Git by probing for a git repo
+        try:
+            result = subprocess.run(
+                ["git", "status"],
+                capture_output=True, text=True, timeout=5,
+            )
+            info["is_dfs_project"] = result.returncode != 0
+        except Exception:
+            info["is_dfs_project"] = True
+    else:
+        info["auth_mode"] = "api_key"
+        info["note"] = (
+            "Running outside Domino. Consult domino_project_settings.md "
+            "for project owner, project name, and DFS settings."
+        )
+
+    return info
+
+
 # ============================================================================
 # DFS (Domino File System) File Sync Tools
 # These tools support syncing files with non-git Domino projects that use DFS
@@ -330,12 +422,9 @@ def _get_remote_file_info(user_name: str, project_name: str, file_path: str) -> 
     Gets the current remote file info (key, size) without downloading content.
     Returns None if file doesn't exist.
     """
-    headers = {
-        "X-Domino-Api-Key": domino_api_key,
-        "Content-Type": "application/json",
-    }
+    headers = {**_get_auth_headers(), "Content-Type": "application/json"}
     
-    url = f"{domino_host}/v4/files/browseFiles"
+    url = f"{_get_domino_host()}/v4/files/browseFiles"
     params = {
         "ownerUsername": user_name,
         "projectName": project_name,
@@ -374,13 +463,10 @@ async def list_domino_project_files(user_name: str, project_name: str, path: str
         Dict containing 'files' list with file info (path, size, lastModified, key)
         or 'error' if the operation failed.
     """
-    headers = {
-        "X-Domino-Api-Key": domino_api_key,
-        "Content-Type": "application/json",
-    }
+    headers = {**_get_auth_headers(), "Content-Type": "application/json"}
     
     # Use browseFiles endpoint to list files
-    url = f"{domino_host}/v4/files/browseFiles"
+    url = f"{_get_domino_host()}/v4/files/browseFiles"
     params = {
         "ownerUsername": user_name,
         "projectName": project_name,
@@ -438,10 +524,10 @@ async def upload_file_to_domino_project(
         return {"error": f"Project '{project_name}' not found for user '{user_name}'"}
     
     # Upload endpoint
-    url = f"{domino_host}/v4/projects/{project_id}/commits/head/files/{file_path}"
+    url = f"{_get_domino_host()}/v4/projects/{project_id}/commits/head/files/{file_path}"
     
     # Prepare multipart form data
-    headers = {"X-Domino-Api-Key": domino_api_key}
+    headers = _get_auth_headers()
     files_data = {'upfile': (file_path.split('/')[-1], file_content, 'text/plain')}
     
     try:
@@ -488,13 +574,13 @@ async def download_file_from_domino_project(
         or 'error' if the operation failed.
     """
     headers = {
-        "X-Domino-Api-Key": domino_api_key,
+        **_get_auth_headers(),
         "Content-Type": "application/json",
-        "Cache-Control": "no-cache",  # Ensure we get the latest version
+        "Cache-Control": "no-cache",
     }
     
     # Use editCode endpoint to get file content
-    url = f"{domino_host}/v4/files/editCode"
+    url = f"{_get_domino_host()}/v4/files/editCode"
     params = {
         "ownerUsername": user_name,
         "projectName": project_name,
