@@ -1,8 +1,8 @@
 # Domino MCP Server
 
-This project provides a Model Context Protocol (MCP) server that when combined with AI coding tools like Cursor allows you to build models via agentic code automation, run training jobs, track experiments, optimize models, and perform exploratory data analysis leveraging the Domino Data Lab platform. *Accelerating data science work doesn’t just happen by involving an AI Coding assistant in writing python scripts, but also by involving the AI agent in the full development, validation and optimization lifecycle.*
+This project provides a Model Context Protocol (MCP) server that when combined with AI coding tools like Cursor allows you to build models via agentic code automation, run training jobs, track experiments, optimize models, and perform exploratory data analysis leveraging the Domino Data Lab platform. *Accelerating data science work doesn't just happen by involving an AI Coding assistant in writing python scripts, but also by involving the AI agent in the full development, validation and optimization lifecycle.*
 
-By using a “vibe modeling” approach combined with Domino’s Enterprise AI Platform, Every iteration an AI co-pilot performs is automatically tracked and is reproducible in Domino. This addresses the core challenge of governance in the AI tools era.
+By using a "vibe modeling" approach combined with Domino's Enterprise AI Platform, Every iteration an AI co-pilot performs is automatically tracked and is reproducible in Domino. This addresses the core challenge of governance in the AI tools era.
 
 More information about MCP Servers with Cursor can be found here.
 
@@ -20,37 +20,33 @@ The server is configured to run using `stdio` transport, meaning Cursor starts a
 
 ## Setup
 
-Step 1.  **Clone the Repository:**
-```bash
-# If you haven't already, clone the repository containing this server
-git clone https://github.com/dominodatalab/domino_mcp_server.git
-cd domino_mcp_server
-```
+1.  **Clone the Repository:**
+    ```bash
+    # If you haven't already, clone the repository containing this server
+    git clone https://github.com/dominodatalab/domino_mcp_server.git
+    cd domino_mcp_server
+    ```
 
-Step 2.  **Install Dependencies:**
+2.  **Install Dependencies:**
     This server requires Python and the `fastmcp` and `requests` libraries. Ensure you have `uv` installed ([https://github.com/astral-sh/uv](https://github.com/astral-sh/uv)). Install the dependencies using `uv`:
-```bash
-uv pip install -e .
-```
+    ```bash
+    uv pip install -e .
+    ```
 
-Step 3.  **Set API Key and Host URL using .env file:**
-    The server needs your Domino API key and host URL to authenticate requests and connect to your Domino instance. 
-Obtain your API key from your Domino account settings. 
-Create a file named `.env` in the root directory of this project (the same directory as `domino_mcp_server.py`) and …
-Add the following lines, replacing the values with your actual credentials:
-```dotenv
-DOMINO_API_KEY='your_api_key_here'
-DOMINO_HOST='https://your-domino-instance.com'
-```
+3.  **Set API Key and Host URL using .env file:**
+    The server needs your Domino API key and host URL to authenticate requests and connect to your Domino instance. Obtain your API key from your Domino account settings. Create a file named `.env` in the root directory of this project (the same directory as `domino_mcp_server.py`) and add the following lines, replacing the values with your actual credentials:
+    ```dotenv
+    DOMINO_API_KEY='your_api_key_here'
+    DOMINO_HOST='https://your-domino-instance.com'
+    ```
+    *Note: Ensure `.env` is added to your `.gitignore` file to prevent accidentally committing your API key and host URL.*
 
-
-Step 4.  **Configure Cursor:**
-    To make Cursor aware of this MCP server, you need to configure it. 
-Create or edit the MCP configuration file for your project or globally:
-    *  **Project-specific:** Create a file named `.cursor/mcp.json` in the root of your project directory.
+4.  **Configure Cursor:**
+    To make Cursor aware of this MCP server, you need to configure it. Create or edit the MCP configuration file for your project or globally:
+    *   **Project-specific:** Create a file named `.cursor/mcp.json` in the root of your project directory.
     *   **Global:** Create a file named `~/.cursor/mcp.json` in your home directory.
 
-Add the following JSON configuration to the file, adjusting the `<path_to_directory>` to the actual absolute path of the directory containing the `domino_mcp_server.py` script and your `.env` file:
+    Add the following JSON configuration to the file, adjusting the `<path_to_directory>` to the actual absolute path of the directory containing the `domino_mcp_server.py` script and your `.env` file:
 
    ```json
         {
@@ -67,54 +63,51 @@ Add the following JSON configuration to the file, adjusting the `<path_to_direct
             }
         }
    ```
-Replace `<path_to_directory>` with the correct absolute path to the folder containing `domino_mcp_server.py` and `.env`.*
+    *Replace `<path_to_directory>` with the correct absolute path to the folder containing `domino_mcp_server.py` and `.env`.*
     *`uv run` will automatically load the `DOMINO_API_KEY` from the `.env` file located in the specified directory.*
 
-Step 5.  **Add Project Cursor Rule:**
-    To optimize the agent's behavior with Domino, create a cursor rule file in your datascience project called `.cursor/rules/domino-project-rule.mdc` in your project root and  ** Set this rule to "Always" in Cursor's rule settings to ensure it's consistently applied**
+5.  **Add Project Cursor Rule:**
+    To optimize the agent's behavior with Domino, create a cursor rule file in your datascience project called `.cursor/rules/domino-project-rule.mdc` in your project root and **Set this rule to "Always" in Cursor's rule settings to ensure it's consistently applied**
 
-** Rule contents to paste in **
-```
----
-description: 
-globs: 
-alwaysApply: true
----
-You are a Domino Data Lab powered agentic coding tool that helps write code in addition to running tasks on the Domino Data Lab platform on behalf of the user using available tool functions provided by the domino_server MCP server. Including functions like domino_server. Whenever possible run commands as domino jobs rather than on the local terminal. 
+    **Rule contents to paste in:**
+    ```
+    ---
+    description: 
+    globs: 
+    alwaysApply: true
+    ---
+    You are a Domino Data Lab powered agentic coding tool that helps write code in addition to running tasks on the Domino Data Lab platform on behalf of the user using available tool functions provided by the domino_server MCP server. Whenever possible run commands as domino jobs rather than on the local terminal.
 
-The domino project name and user name are required and available in a file called domino_project_settings.md which needs to be used in most tool calls by the agentic assistant.
+    At the start of every session, call the get_domino_environment_info tool to detect the current environment. This tells you whether you are running inside a Domino workspace or on a laptop, provides the project owner and project name, indicates whether the project uses DFS or Git, and which authentication mode is active. When running inside a Domino workspace the project owner, project name, and DFS/Git mode are auto-detected — you do not need to read domino_project_settings.md. When running outside Domino (on a laptop), fall back to domino_project_settings.md for the project name, user name, and dfs setting.
 
-When running a job, always check its status and results if completed and briefly explain any conclusions from the result of the job run. If a job result ever includes an mflow or experiment run URL, always share that with the user using the open_web_browser tool.
+    When running a job, always check its status and results if completed and briefly explain any conclusions from the result of the job run. If a job result ever includes an mlflow or experiment run URL, always share that with the user using the open_web_browser tool.
 
-Any requests related to understanding or manipulating project data should assume a dataset file is already part of the domino project and accessible via job runs. Always create scripts to understand and transform data via job runs. The script can assume all project data is accessible under the '/mnt/data/' directory or the '/mnt/imported/data/' directory, be sure to understand the full path to a dataset file before using it by running a job to list all folder contents recursively. Analytical outputs should be in plain text tabular format sent to stdout, this makes it easier to check results from the job run.
+    Any requests related to understanding or manipulating project data should assume a dataset file is already part of the domino project and accessible via job runs. Always create scripts to understand and transform data via job runs. The script can assume all project data is accessible under the '/mnt/data/' directory or the '/mnt/imported/data/' directory, be sure to understand the full path to a dataset file before using it by running a job to list all folder contents recursively. Analytical outputs should be in plain text tabular format sent to stdout, this makes it easier to check results from the job run.
 
-If the project is dfs instead of git based. check the dfs=true or false settings in check domino_project_settings.md, the datasets path is under /domino/datasets/*
+    If the project is DFS instead of Git based (auto-detected inside Domino, or dfs=true in domino_project_settings.md when outside Domino), the datasets path is under /domino/datasets/*
 
-Any scripts used to analyze or transform data within a Domino project should not be deleted. When performing analysis, generate useful summary charts in an image format and save to the project files.
+    Any scripts used to analyze or transform data within a Domino project should not be deleted. When performing analysis, generate useful summary charts in an image format and save to the project files.
 
-Always check if our local project has uncommitted changes, you must commit and push changes before attempting to run any domino jobs otherwise domino can't see the new file changes. Be sure to check domino_project_settings.md if dfs=true which means this NOT a git based domino project, and the MCP Server functions for saving files will need to be used instead of git before running any jobs. If it is a git based project (dfs=false in domino_project_settings.md), use regular git commands to keep files synced between the IDE and the domino project.
+    Always check if our local project has uncommitted changes. For Git-based projects, you must commit and push changes before attempting to run any domino jobs otherwise domino can't see the new file changes. For DFS-based projects (auto-detected or dfs=true in domino_project_settings.md), use the MCP Server file sync functions (upload_file_to_domino_project, smart_sync_file, etc.) instead of git before running any jobs.
 
-When training a model use mlflow instrumentation assuming a server is running, no need to set the url or anything, it should just work.
-```
+    When training a model use mlflow instrumentation assuming a server is running, no need to set the url or anything, it should just work.
+    ```
 
-<br />
-
-Step 6.  **Create Domino Project Settings:**
+6.  **Create Domino Project Settings:**
     Create a file named `domino_project_settings.md` in your project root with your Domino project details:
-```markdown
-# Domino project settings to use with the mcp server domino_server and its job runner functions
-project_name="your-project-name"
-user_name="your_username"
-dfs=false
-```
+    ```markdown
+    # Domino project settings to use with the mcp server domino_server and its job runner functions
+    project_name="your-project-name"
+    user_name="your_username"
+    dfs=false
+    ```
+    Replace `"your-project-name"` and `"your_username"` with your actual Domino project name and user name from the project URL. Set `dfs=true` if your Domino Project is using DFS (Domino File System) and not a regular Git based repo.
 
-Replace `"your-project-name"` and `"your_username"` with your actual Domino project name and user name from the project URL. set `dfs=true` if your Domino Project is using DFS (Domino File System) and not a regular Git based repo.
+    **IMPORTANT: The above user name should be from the project URL, not necessarily your user name if you don't own the project**
 
-**IMPORTANT: The above user name should be from the project URL, not necessarily your user name if you don't own the project**
+7.  **Restart Cursor:** Restart Cursor completely to load the new MCP configuration.
 
-Step 7.  **Restart Cursor:** Restart Cursor completely to load the new MCP configuration.
-
-Step 8.  **Verify:** Go to Cursor Settings -> Context -> Model Context Protocol. You should see "domino_server" listed under Available Tools.
+8.  **Verify:** Go to Cursor Settings -> Context -> Model Context Protocol. You should see "domino_server" listed under Available Tools.
 
 ## Usage in Cursor
 
@@ -122,7 +115,7 @@ Once the MCP server is configured and the project files are set up, you can inte
 
 [Important: Make sure that the coding assistant has made a git commit before running a job.](#important-warning)
 
-** Quick example prompts to run a job (Cursor must be in 'agent' mode):**
+**Quick example prompts to run a job (Cursor must be in 'agent' mode):**
 ```
 Run the script train_my_model.py, Check that the job run executed correctly afterwards and summarize the results from the job.
 ```
@@ -201,7 +194,6 @@ Create a comprehensive analysis report of our project's model performance over t
 
 These prompts leverage the intelligent cursor rule to automatically handle git commits, run jobs on Domino instead of locally, and provide comprehensive analysis of results.
 
-
 ## Important Warning
 
 **The coding assistant sometimes forgets to run a git commit and push before executing Domino jobs.** Since Domino jobs run on the remote repository state, any uncommitted local changes will not be visible to the job execution environment. 
@@ -213,4 +205,3 @@ git add .
 git commit -m "Update files for domino job"
 git push
 ```
-
