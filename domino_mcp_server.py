@@ -35,6 +35,24 @@ def _get_domino_host() -> str:
     return host.rstrip("/")
 
 
+def _get_external_host() -> str:
+    """
+    Return the external (user-facing) Domino URL for generating shareable links.
+
+    Inside a workspace: parse from VSCODE_PROXY_URI if available, fall back to _get_domino_host().
+    Outside (laptop): DOMINO_HOST is already the external URL.
+    """
+    if not _is_domino_workspace():
+        return _get_domino_host()
+
+    vpu = os.getenv("VSCODE_PROXY_URI", "")
+    if vpu:
+        parsed = urllib.parse.urlparse(vpu)
+        return f"{parsed.scheme}://{parsed.hostname}"
+
+    return _get_domino_host()
+
+
 def _get_auth_headers() -> dict:
     """
     Return authentication headers for Domino API calls.
@@ -168,7 +186,7 @@ def _extract_and_format_mlflow_url(text: str, user_name: str, project_name: str)
         experiment_id = match.group(1)
         run_id = match.group(2)
         # Construct the new URL
-        new_url = f"{_get_domino_host()}/experiments/{user_name}/{project_name}/{experiment_id}/{run_id}"
+        new_url = f"{_get_external_host()}/experiments/{user_name}/{project_name}/{experiment_id}/{run_id}"
         return new_url
     else:
         return None # Return None if the pattern is not found
@@ -519,20 +537,16 @@ async def upload_file_to_domino_project(
         Dict containing upload result with 'path', 'size', 'key' on success,
         or 'error' if the operation failed.
     """
-    # Get the project ID first
-    project_id = _get_project_id(user_name, project_name)
-    if not project_id:
-        return {"error": f"Project '{project_name}' not found for user '{user_name}'"}
-    
-    # Upload endpoint
-    url = f"{_get_domino_host()}/v4/projects/{project_id}/commits/head/files/{file_path}"
-    
-    # Prepare multipart form data
+    encoded_user_name = _validate_url_parameter(user_name, "user_name")
+    encoded_project_name = _validate_url_parameter(project_name, "project_name")
+
+    # v1 PUT endpoint works with both Bearer token (workspace) and API key (laptop)
+    url = f"{_get_domino_host()}/v1/projects/{encoded_user_name}/{encoded_project_name}/{file_path}"
+
     headers = _get_auth_headers()
-    files_data = {'upfile': (file_path.split('/')[-1], file_content, 'text/plain')}
-    
+
     try:
-        response = requests.post(url, headers=headers, files=files_data)
+        response = requests.put(url, headers=headers, data=file_content.encode("utf-8"))
         response.raise_for_status()
         result = response.json()
         
