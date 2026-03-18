@@ -23,11 +23,12 @@ def _get_domino_host() -> str:
     """
     Return the base URL for Domino API calls.
 
-    Inside a Domino workspace the platform provides DOMINO_API_HOST.
+    Inside a Domino workspace we route through the local proxy at
+    localhost:8899 which reliably forwards API calls to the platform.
     Outside (laptop), we fall back to DOMINO_HOST from the .env file.
     """
     if _is_domino_workspace():
-        return os.environ["DOMINO_API_HOST"].rstrip("/")
+        return "http://localhost:8899"
     host = os.getenv("DOMINO_HOST")
     if not host:
         raise ValueError("DOMINO_HOST environment variable not set.")
